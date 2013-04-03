@@ -61,17 +61,25 @@
     }
 }
 
-- (void)imageForURL:(NSString *)url completion:(void (^)(UIImage *image))completion {
+- (void)imageForURL:(NSURL *)URL completion:(void (^)(UIImage *))completion {
+    [self imageForAddress:URL.absoluteString completion:completion];
+}
+
+- (void)imageForAddress:(NSString *)address completion:(void (^)(UIImage *image))completion {
+    if (address.length == 0) {
+        return;
+    }
+
     __weak JGAFImageCache *weakSelf = self;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *sha1 = [url jgaf_sha1];
+        NSString *sha1 = [address jgaf_sha1];
         UIImage *image = [_imageCache objectForKey:sha1];
         if(image == nil) {
             image = [weakSelf imageFromDiskForKey:sha1];
         }
         
         if(image == nil) {
-            [weakSelf loadRemoteImageForURL:url key:sha1 completion:completion];
+            [weakSelf loadRemoteImageForAddress:address key:sha1 completion:completion];
         }
         else if(completion) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -122,8 +130,8 @@
     return httpClient;
 }
 
-- (void)loadRemoteImageForURL:(NSString *)url key:(NSString *)key completion:(void (^)(UIImage *image))completion {
-    NSURL *imageURL = [NSURL URLWithString:url];
+- (void)loadRemoteImageForAddress:(NSString *)address key:(NSString *)key completion:(void (^)(UIImage *image))completion {
+    NSURL *imageURL = [NSURL URLWithString:address];
     NSString *baseURL = [NSString stringWithFormat:@"%@://%@", imageURL.scheme, imageURL.host];
     NSString *imagePath = [[self class] escapedPathForURL:imageURL];    
     AFHTTPClient *httpClient = [self httpClientForBaseURL:baseURL];

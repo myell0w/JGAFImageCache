@@ -21,6 +21,8 @@
 @property (assign, nonatomic) NSTimeInterval fileExpirationInterval;
 
 + (JGAFImageCache *)sharedInstance;
-- (void)imageForURL:(NSString *)url completion:(void (^)(UIImage *image))completion;
+
+- (void)imageForURL:(NSURL *)URL completion:(void (^)(UIImage *image))completion;
+- (void)imageForAddress:(NSString *)address completion:(void (^)(UIImage *image))completion;
 
 @end
