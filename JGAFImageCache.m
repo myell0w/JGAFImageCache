@@ -51,7 +51,7 @@
     backgroundTaskIdentifier = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
         [[UIApplication sharedApplication] endBackgroundTask:backgroundTaskIdentifier];
     }];
-    
+
     if(backgroundTaskIdentifier != UIBackgroundTaskInvalid) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             NSDate *maxAge = [NSDate dateWithTimeIntervalSinceNow:_fileExpirationInterval];
@@ -77,11 +77,12 @@
         if(image == nil) {
             image = [weakSelf imageFromDiskForKey:sha1];
         }
-        
-        if(image == nil) {
+
+        if (image == nil) {
             [weakSelf loadRemoteImageForAddress:address key:sha1 completion:completion];
-        }
-        else if(completion) {
+        } else if(completion != nil) {
+            image = [[self class] decompressedImageForImage:image];
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(image);
             });
@@ -105,7 +106,7 @@
             }
         }
     }
-    @catch(NSException *exception) {        
+    @catch(NSException *exception) {
 #if JGAFImageCache_LOGGING_ENABLED
         NSLog(@"%s [Line %d] %@", __PRETTY_FUNCTION__, __LINE__, exception);
 #endif
@@ -121,7 +122,7 @@
         if(httpClient == nil) {
             httpClient = [[AFHTTPClient alloc] initWithBaseURL:[NSURL URLWithString:baseURL]];
             [_httpClientCache setObject:httpClient forKey:key];
-            
+
 #if JGAFImageCache_LOGGING_ENABLED
             NSLog(@"%s [line %d] AFHTTPClient initWithBaseURL:%@", __PRETTY_FUNCTION__, __LINE__, baseURL);
 #endif
@@ -133,47 +134,48 @@
 - (void)loadRemoteImageForAddress:(NSString *)address key:(NSString *)key completion:(void (^)(UIImage *image))completion {
     NSURL *imageURL = [NSURL URLWithString:address];
     NSString *baseURL = [NSString stringWithFormat:@"%@://%@", imageURL.scheme, imageURL.host];
-    NSString *imagePath = [[self class] escapedPathForURL:imageURL];    
+    NSString *imagePath = [[self class] escapedPathForURL:imageURL];
     AFHTTPClient *httpClient = [self httpClientForBaseURL:baseURL];
-    [httpClient
-     getPath:imagePath
-     parameters:nil
-     success:^(AFHTTPRequestOperation *operation, id responseObject) {
-         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-             UIImage *image = nil;
-             if(responseObject) {
-                 @try {
-                     image = [[UIImage alloc] initWithData:responseObject];
-                 }
-                 @catch(NSException *exception) {
+    [httpClient getPath:imagePath
+             parameters:nil
+                success:^(AFHTTPRequestOperation *operation, id responseObject) {
+                    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                        UIImage *image = nil;
+                        if(responseObject) {
+                            @try {
+                                image = [[UIImage alloc] initWithData:responseObject];
+                            }
+                            @catch(NSException *exception) {
 #if JGAFImageCache_LOGGING_ENABLED
-                     NSLog(@"%s [Line %d] %@", __PRETTY_FUNCTION__, __LINE__, exception);
+                                NSLog(@"%s [Line %d] %@", __PRETTY_FUNCTION__, __LINE__, exception);
 #endif
-                 }
-             }
-             
-             if(image) {
-                 [[self class] saveImageToDiskForKey:image key:key];
-                 [_imageCache setObject:image forKey:key];
-                 
-             }
-             
-             if(completion) {
-                 dispatch_async(dispatch_get_main_queue(), ^{
-                     completion(image);
-                 });
-             }
-         });
-     }
-     failure:^(AFHTTPRequestOperation *operation, NSError *error) {
-         if(completion) {
-             completion(nil);
-         }
-         
+                            }
+                        }
+
+                        if(image) {
+                            [[self class] saveImageToDiskForKey:image key:key];
+                            [_imageCache setObject:image forKey:key];
+
+                        }
+
+                        if(completion) {
+                            image = [[self class] decompressedImageForImage:image];
+                            
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                completion(image);
+                            });
+                        }
+                    });
+                }
+                failure:^(AFHTTPRequestOperation *operation, NSError *error) {
+                    if(completion) {
+                        completion(nil);
+                    }
+
 #if JGAFImageCache_LOGGING_ENABLED
-         NSLog(@"%s [Line %d] %@", __PRETTY_FUNCTION__, __LINE__, error);
+                    NSLog(@"%s [Line %d] %@", __PRETTY_FUNCTION__, __LINE__, error);
 #endif
-     }];
+                }];
 }
 
 #pragma mark - Class Methods
@@ -249,15 +251,15 @@
     if(url.path.length) {
         escapedPath = [self stringByEscapingSpaces:url.path];
     }
-    
+
     if(url.query.length) {
         escapedPath = [escapedPath stringByAppendingFormat:@"?%@", url.query];
     }
-    
+
     if(url.fragment.length) {
         escapedPath = [escapedPath stringByAppendingFormat:@"#%@", url.fragment];
     }
-    
+
     return escapedPath.length > 0 ? escapedPath : nil;
 }
 
@@ -270,6 +272,33 @@
                                             (CFStringRef)@" ",
                                             kCFStringEncodingUTF8);
     return (__bridge_transfer NSString *)escaped;
+}
+
++ (UIImage *)decompressedImageForImage:(UIImage *)image {
+    CGImageRef imageRef = image.CGImage;
+
+    // make a bitmap context of a suitable size to draw to, forcing decode
+    size_t width = CGImageGetWidth(imageRef);
+    size_t height = CGImageGetHeight(imageRef);
+
+    CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef imageContext =  CGBitmapContextCreate(NULL, width, height, 8, width*4, colourSpace,
+                                                       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(colourSpace);
+    
+    // draw the image to the context, release it
+    CGContextDrawImage(imageContext, CGRectMake(0, 0, width, height), imageRef);
+    
+    // now get an image ref from the context
+    CGImageRef outputImage = CGBitmapContextCreateImage(imageContext);
+    
+    UIImage *cachedImage = [UIImage imageWithCGImage:outputImage];
+    
+    // clean up
+    CGImageRelease(outputImage);
+    CGContextRelease(imageContext);
+    
+    return cachedImage;
 }
 
 @end
